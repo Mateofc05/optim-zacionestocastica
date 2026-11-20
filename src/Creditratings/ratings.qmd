@@ -1,0 +1,202 @@
+---
+title: "Actividad Ratings"
+author: "Mateo Flores"
+format:
+    html:
+        toc: true
+        html-math-method: katex
+        embed-resources: true
+        self-contained-math: true
+        df-print: kable
+editor: source
+
+---
+
+## Librerias
+
+```{python}
+import numpy as np
+import pandas as pd
+import seaborn as sns
+import scipy.stats as stats
+import matplotlib.pyplot as plt
+```
+
+## Datos
+
+Se cargan las calificaciones historicas y se convierte la columna de fecha
+al tipo `datetime` para poder ordenar cronologicamente cada emisor.
+
+```{python}
+ruta = '/Users/mateoflores/Documents/Tec/OptimizacionEstocastica/data/ratings.csv'
+
+datos = pd.read_csv(ruta)
+datos['date'] = pd.to_datetime(datos['date'], format='%d/%m/%Y')
+datos.head(5)
+```
+
+## Frecuencias
+
+### Frecuencia por calificacion
+
+```{python}
+frec_calif = datos['rating'].value_counts(normalize=True).reset_index()
+frec_calif
+```
+
+### Frecuencia por emisor
+
+```{python}
+frec_emisor = datos['id_company'].value_counts(normalize=True).reset_index()
+frec_emisor
+```
+
+## Escala de calificaciones
+
+```{python}
+ESCALA = ['AAA', 'AA', 'A', 'BBB', 'BB', 'B', 'CCC', 'CC', 'C', 'DDD', 'DD', 'D']
+
+# posicion de cada calificacion dentro de la matriz
+posiciones = {calif: k for k, calif in enumerate(ESCALA)}
+
+
+def matrizVacia():
+    #     AAA  AA  A  BBB  BB  B  CCC  CC  C  DDD  DD  D
+    M = np.zeros((len(ESCALA), len(ESCALA)))
+    return M
+
+
+def posicionDe(calif):
+    return posiciones[calif]
+```
+
+## Matrices de transicion
+
+### Conteo de transiciones
+
+```{python}
+def conteoTransiciones(emisor):
+    hist = datos[datos['id_company'] == emisor]
+    hist = hist.sort_values(by='date')
+    M = matrizVacia()
+    for k in range(len(hist) - 1):
+        desde = hist.iloc[k]['rating']
+        hacia = hist.iloc[k + 1]['rating']
+        M[posicionDe(desde)][posicionDe(hacia)] += 1
+    return M
+```
+
+### Normalizacion por renglon
+
+```{python}
+def normalizaFila(fila):
+    total = np.sum(fila)
+    for k in range(len(fila)):
+        fila[k] = fila[k] / total if total > 0 else fila[k]
+    return fila
+
+
+def normalizaMatriz(M):
+    for k in range(M.shape[0]):
+        M[k] = normalizaFila(M[k])
+    return M
+```
+
+### Matriz de cada emisor
+
+```{python}
+emisores = datos['id_company'].dropna().unique()
+matrices = {}
+
+for emisor in emisores:
+    matrices[emisor] = normalizaMatriz(conteoTransiciones(emisor))
+```
+
+## Visualizacion
+
+```{python}
+#| label: fig-matrices
+#| fig-cap: "Matrices de probabilidad de transicion por emisor"
+#| fig-width: 12
+#| fig-height: 8
+cuantos = len(emisores)
+cols = 4
+renglones = int(np.ceil(cuantos / cols))
+
+fig, ejes = plt.subplots(renglones, cols, figsize=(12, 8),
+                         subplot_kw={'projection': '3d'})
+ejes = np.atleast_2d(ejes)
+
+for k, emisor in enumerate(emisores):
+    M = matrices[emisor]
+
+    eje = ejes[k // cols, k % cols]
+
+    ejeX = np.arange(M.shape[0])
+    ejeY = np.arange(M.shape[1])
+    X, Y = np.meshgrid(ejeX, ejeY)
+    Z = M[X, Y]
+
+    eje.bar3d(X.ravel(), Y.ravel(), np.zeros_like(Z).ravel(),
+              0.8, 0.8, Z.ravel(), shade=True)
+
+    eje.set_xlabel('Estado Actual')
+    eje.set_ylabel('Estado Siguiente')
+    eje.set_zlabel('Prob.')
+    eje.set_title(f'Emisor {emisor}')
+    eje.set_zlim(0, 1)
+
+# Apaga ejes sobrantes
+for j in range(cuantos, renglones * cols):
+    ejes[j // cols, j % cols].axis('off')
+
+fig.suptitle('Matrices de Probabilidad de Transicion', fontsize=16)
+plt.tight_layout()
+plt.show()
+```
+
+## Proyeccion
+
+### Funciones auxiliares
+
+```{python}
+def ultimaObservacion(emisor):
+    hist = datos[datos['id_company'] == emisor]
+    hist = hist.sort_values(by='date')
+    calif = hist.iloc[-1]['rating']
+    fecha = hist.iloc[-1]['date']
+    print(f"Ultima calificacion el {fecha.strftime('%Y-%m-%d')} : {calif}")
+    return calif, fecha
+
+
+def siguienteCalif(emisor, calif_actual):
+    M = matrices[emisor]
+    fila = M[posicionDe(calif_actual)]
+    destino = np.argmax(fila)
+    return ESCALA[destino]
+
+
+def siguienteFecha(fecha):
+    # fecha es un Timestamp de pandas
+    return fecha + pd.DateOffset(months=1)
+```
+
+### Proyeccion mes a mes
+
+```{python}
+def proyectar(mes_objetivo):
+    for emisor in emisores:
+        print(f"--EMISOR {emisor}--")
+        calif, fecha = ultimaObservacion(emisor)
+        while fecha < mes_objetivo:
+            nueva_calif = siguienteCalif(emisor, calif)
+            fecha = siguienteFecha(fecha)
+            calif = nueva_calif
+
+            print(f"Calificacion el {fecha.strftime('%Y-%m-%d')} : {nueva_calif} ")
+        print("")
+
+
+mes_objetivo = pd.Timestamp('2026-09-01')  # mes hasta el que se proyecta
+proyectar(mes_objetivo)
+```
